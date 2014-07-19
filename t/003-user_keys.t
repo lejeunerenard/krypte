@@ -5,7 +5,7 @@ use warnings;
 
 use FindBin;
 
-use Test::More tests => 22;
+use Test::More tests => 30;
 use Test::Deep; # (); # uncomment to stop prototype errors
 use Test::Exception;
 
@@ -124,3 +124,41 @@ $app->new_user(
    admin_password => 'underground',
 );
 is $app->{users}{'alice'}{is_admin}, 1, 'new_is_admin takes a truthy value';
+
+note("delete_user");
+throws_ok { $app->delete_user(
+   user => undef,
+   admin_user => 'admin',
+   admin_password => 'underground',
+); } qr/user must be defined/, 'dies when user is undefined';
+throws_ok { $app->delete_user(
+   user => 'bob',
+   admin_user => undef,
+   admin_password => 'underground',
+); } qr/admin_user must be defined/, 'dies when admin_user is undefined';
+throws_ok { $app->delete_user(
+   user => 'bob',
+   admin_user => 'admin',
+   admin_password => undef,
+); } qr/admin_password must be defined/, 'dies when admin_password is undefined';
+throws_ok { $app->delete_user(
+   user => 'methuselah',
+   admin_user => 'admin',
+   admin_password => 'underground',
+); } qr/methuselah doesn't exist/, 'dies when given non-existent user';
+throws_ok { $app->delete_user(
+   user => 'bob',
+   admin_user => 'derek',
+   admin_password => 'jeter',
+); } qr/derek doesn't exist/, 'dies when given non-existent admin';
+throws_ok { $app->delete_user(
+   user => 'bob',
+   admin_user => 'bob',
+   admin_password => 'thebuilder',
+); } qr/is not an admin/, 'dies when given a non-admin user as admin';
+lives_ok { $app->delete_user(
+   user => 'bob',
+   admin_user => 'admin',
+   admin_password => 'underground',
+); } 'lives when all args are given';
+ok not( defined $app->{users}{'bob'} ), 'Bob is no more';

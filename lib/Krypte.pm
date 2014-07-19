@@ -65,6 +65,37 @@ sub create_user_hash {
    undef $user_key;
 }
 
+=head2 delete_user
+
+Using a valid admin user, remove the given user
+
+=cut
+
+sub delete_user {
+   my $self = shift;
+   my %options = @_;
+   my $user = $options{user};
+   my $admin_user = $options{admin_user};
+   my $admin_password = $options{admin_password};
+
+   # Die if inputs are not set
+   foreach ('user', 'admin_user', 'admin_password') {
+      die $_.' must be defined' unless defined $options{$_};
+   }
+   undef %options;
+
+   # Die if $admin_user is doesnt exist
+   die "$admin_user doesn't exist" unless $self->{users}{$admin_user};
+
+   # Die if $admin_user is not an admin
+   die '$admin_user is not an admin' unless $self->{users}{$admin_user}{is_admin};
+
+   # Die if $user is doesnt exist
+   die "$user doesn't exist" unless $self->{users}{$user};
+
+   delete $self->{users}{$user};
+}
+
 =head2 $self->new_user
 
 C<$self->new_user> is a function to create a new user and all the related keys.
@@ -84,6 +115,7 @@ sub new_user {
    foreach ('admin_user', 'admin_password', 'new_user', 'new_password') {
       die $_.' must be defined' unless defined $options{$_};
    }
+   undef %options;
 
    # Die if $admin_user is doesnt exist
    die '$admin_user doesn\'t exist' unless $self->{users}{$admin_user};
@@ -210,6 +242,12 @@ sub tcp_handler {
             $self->new_user(
                new_user => $message->{new_user},
                new_password => $message->{new_password},
+               admin_user => $message->{admin_user},
+               admin_password => $message->{admin_password},
+            );
+         } elsif ($message->{method} eq 'deleteUser') {
+            $self->delete_user(
+               user => $message->{user},
                admin_user => $message->{admin_user},
                admin_password => $message->{admin_password},
             );
