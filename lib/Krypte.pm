@@ -18,32 +18,26 @@ use Data::Dumper;
 
 use constant DEBUG => $ENV{SERVER_DEBUG};
 
-=head2 $self->new_user
+=head2 create_user_hash
 
-C<$self->new_user> is a function to create a new user and all the related keys.
+Creates or overrides the user hash with the given info
 
 =cut
 
-sub new_user {
+sub create_user_hash {
    my $self = shift;
    my %options = @_;
-   my $admin_user = $options{admin_user};
-   my $admin_password = $options{admin_password};
-   my $new_user = $options{new_user};
-   my $new_password = $options{new_password};
-   my $new_is_admin = $options{new_is_admin};
+   my $user = $options{user};
+   my $user_key = $options{user_key};
+   my $shared_key = $options{shared_key};
+   my $user_password = $options{user_password};
+   my $is_admin = ( $options{is_admin} ) ? 1 : 0;
 
-   # Throw error if $admin_user is not an admin
-   die '$admin_user is not an admin' unless $self->{users}{$admin_user}
-      and $self->{users}{$admin_user}{is_admin};
-
-   # ----- Get SharedKey with admin creds -----
-   my $shared_key = $self->get_shared_key($admin_user, $admin_password);
-   undef $admin_user;
-   undef $admin_password;
-
-   # ----- Generate UserKey -----
-   my $user_key = $self->{crypt_source}->random_bytes(512);
+   # Die if inputs are not set
+   foreach ('user', 'user_key', 'shared_key', 'user_password') {
+      die $_.' must be defined' unless defined $options{$_};
+   }
+   undef %options;
 
    # ----- Encrypt SharedKey with UserKey -----
    # Create cipher for the SharedKey
@@ -59,20 +53,69 @@ sub new_user {
    # ----- Encrypt Userkey with password -----
    # Create cipher for the UserKey
    my $user_cipher = Crypt::CBC->new(
-      -key => $new_password,
+      -key => $user_password,
       -cipher => 'Blowfish',
    );
    # Store user info into the keys hash
-   $self->{users}{$new_user} = {
+   $self->{users}{$user} = {
       key => $user_cipher->encrypt($user_key),
-      is_admin => $new_is_admin,
+      is_admin => $is_admin,
       shared_key => $enc_shared_key,
    };
+   undef $user_key;
+}
+
+=head2 $self->new_user
+
+C<$self->new_user> is a function to create a new user and all the related keys.
+
+=cut
+
+sub new_user {
+   my $self = shift;
+   my %options = @_;
+   my $admin_user = $options{admin_user};
+   my $admin_password = $options{admin_password};
+   my $new_user = $options{new_user};
+   my $new_password = $options{new_password};
+   my $new_is_admin = ( $options{new_is_admin} ) ? 1 : 0;
+
+   # Die if inputs are not set
+   foreach ('admin_user', 'admin_password', 'new_user', 'new_password') {
+      die $_.' must be defined' unless defined $options{$_};
+   }
+
+   # Die if $admin_user is doesnt exist
+   die '$admin_user doesn\'t exist' unless $self->{users}{$admin_user};
+
+   # Die if $admin_user is not an admin
+   die '$admin_user is not an admin' unless $self->{users}{$admin_user}{is_admin};
+
+   # ----- Get SharedKey with admin creds -----
+   my $shared_key = $self->get_shared_key($admin_user, $admin_password);
+   undef $admin_user;
+   undef $admin_password;
+
+   # ----- Generate UserKey -----
+   my $user_key = $self->{crypt_source}->random_bytes(512);
+
+   $self->create_user_hash(
+      user => $new_user,
+      user_key => $user_key,
+      user_password => $new_password,
+      shared_key => $shared_key,
+      is_admin => $new_is_admin,
+   );
+   undef $shared_key;
+   undef $user_key;
+   undef $new_password;
 }
 
 =head2 get_shared_key
 
-Summary of get_shared_key
+Given a user and password, get_shared_key will return the unencrypted shared key for the system.
+
+Be careful to handle the shared key with care. It should never be left anywhere (memory or disk) unencrypted.
 
 =cut
 
@@ -80,6 +123,12 @@ sub get_shared_key {
    my $self = shift;
    my $user = shift;
    my $password = shift;
+
+   # Die if inputs are not set
+   die 'User and Password must be defined' unless defined( $user ) and defined( $password );
+
+   # Die if user doesnt exist
+   die 'User must exist' unless defined $self->{users}{$user};
 
    # ----- Get UserKey with password -----
    # Create cipher for getting the UserKey
@@ -123,37 +172,20 @@ sub prepare_handler {
    my $user = 'admin';
    my $password = 'underground';
 
-   # Setup admin user
-   # ----- Generate UserKey -----
-   my $admin_key = $self->{crypt_source}->random_bytes(512);
-   # @TODO get this shared key some other way at startup
-   my $shared_key = $self->{crypt_source}->random_bytes(512);
-
-   # ----- Encrypt SharedKey with UserKey -----
-   # Create cipher for the SharedKey
-   my $cipher = Crypt::CBC->new(
-      -key => $admin_key,
-      -cipher => 'Blowfish',
-   );
-   my $enc_shared_key = $cipher->encrypt($shared_key);
-   # Garbage collect, just in case
-   undef $cipher;
-
-   # ----- Encrypt Userkey with password -----
-   # Create cipher for the UserKey
-   my $user_cipher = Crypt::CBC->new(
-      -key => $password,
-      -cipher => 'Blowfish',
-   );
-   # Store user info into the keys hash
-   $self->{users}{$user} = {
-      key => $user_cipher->encrypt($admin_key),
+   # ===== Setup admin user =====
+   $self->create_user_hash(
+      user => $user,
+      user_password => $password,
+      user_key => $self->{crypt_source}->random_bytes(512),
+      # @TODO get this shared key some other way at startup
+      shared_key => $self->{crypt_source}->random_bytes(512),
       is_admin => 1,
-      shared_key => $enc_shared_key,
-   };
+   );
    print STDOUT "First Admin Credentials:\n";
    print STDOUT "u: $user\n";
    print STDOUT "p: $password\n";
+   undef $user;
+   undef $password;
 
    DEBUG && warn "Listening on $host:$port\n";
 }
