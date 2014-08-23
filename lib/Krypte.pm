@@ -188,11 +188,59 @@ sub get_shared_key {
    return $shared_key;
 }
 
+=head2 create_session
+
+C<create_session> will create a temporary session for the given user
+and password. It returns the session token which can be used by the
+application to unencrypt all future traffic. It will also setup an
+automatic timer to kill the session based on a hard coded value.
+
+=cut
+
+sub create_session {
+   my $self = shift;
+   my %options = @_;
+   my $user = $options{user};
+   my $password = $options{password};
+
+   # Die if inputs are not set
+   foreach ('user', 'password') {
+      die $_.' must be defined' unless defined $options{$_};
+   }
+   undef %options;
+
+   # Die if user doesnt exist
+   die "$user must exist" unless defined $self->{users}{$user};
+
+   # Generate new session token
+   my $session_token = $self->{crypt_source}->random_bytes(512);
+
+   # Get shared key and encrypt it with the session token
+   my $cipher = Crypt::CBC->new(
+      -key => $session_token,
+      -cipher => 'Blowfish',
+   );
+   $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
+     $self->get_shared_key($user, $password)
+   );
+
+   # Create timer for the session
+   $self->{sessions}{$session_token}{timer} = AE::timer $self->{session_time_out}, 0, sub {
+      delete $self->{sessions}{$session_token};
+   };
+
+   # Return the session token so the application can use it
+   return $session_token;
+}
+
 sub new {
    my $class = shift;
+   my %options = @_;
+   my $session_time_out = $options{session_time_out} || 120;
    my $self = {
       crypt_source => Crypt::Random::Seed->new( NonBlocking => 1 ),
       users => {},
+      session_time_out => $session_time_out,
    };
 
    bless $self, $class;
@@ -286,7 +334,7 @@ sub run {
    my %options = @_;
    my $host = $options{host};
    my $port = $options{port};
-
+   my $session_time_out = $options{session_time_out};
 
    $self->start_listening(
       host => $host,

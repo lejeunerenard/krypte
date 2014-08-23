@@ -5,9 +5,9 @@ use warnings;
 
 use FindBin;
 
-use Test::More tests => 30;
+use Test::More tests => 38;
 use Test::Deep; # (); # uncomment to stop prototype errors
-use Test::Exception;
+use Data::Dumper;
 
 use Krypte;
 
@@ -166,4 +166,37 @@ subtest 'delete_user' => sub {
      admin_password => 'underground',
   ); } 'lives when all args are given';
   ok not( defined $app->{users}{'bob'} ), 'Bob is no more';
+};
+subtest 'create_session' => sub {
+  # Test error throwing for input
+  my @required_fields = ( 'user', 'password');
+  my %user_creds = (
+    user => 'carl',
+    password => 'password',
+  );
+  foreach my $field ( @required_fields ) {
+    my %input_user = %user_creds;
+    $input_user{$field} = undef;
+    throws_ok { $app->create_session(
+        %input_user
+    ); } qr/$field must be defined/, "dies when $field is undefined";
+  }
+
+  throws_ok { $app->create_session(
+    user => 'diana',
+    password => 'princess',
+  ); } qr/diana must exist/, "dies when user doesn't exist";
+
+  my $session_token;
+  lives_ok {
+    $session_token = $app->create_session(
+      %user_creds,
+    );
+  } 'lives when used with a valid user';
+  ok $session_token, 'returns a session token';
+  my @session_keys = ( 'shared_key', 'timer' );
+  is_deeply [ sort keys $app->{sessions}{$session_token} ], \@session_keys, 'created session has proper hash structure';
+  foreach ( @session_keys ) {
+    ok defined $app->{sessions}{$session_token}{$_}, "$_ is defined in session hash";
+  }
 };
