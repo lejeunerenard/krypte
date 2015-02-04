@@ -286,27 +286,42 @@ sub tcp_handler {
 
          print "Received: " .Dumper($message)."\n";
 
-         if ($message->{method} eq 'newUser') {
-            $self->new_user(
-               new_user => $message->{new_user},
-               new_password => $message->{new_password},
-               admin_user => $message->{admin_user},
-               admin_password => $message->{admin_password},
-            );
-         } elsif ($message->{method} eq 'deleteUser') {
-            $self->delete_user(
-               user => $message->{user},
-               admin_user => $message->{admin_user},
-               admin_password => $message->{admin_password},
-            );
-         } elsif ($message->{method} eq 'dump') {
-            foreach my $user ( keys %{$self->{users}} ) {
-               print STDERR "$user:\n";
-               print STDERR "key: ".unpack('H*',$self->{users}{$user}{key})."\n";
-               print STDERR "shared key: ".unpack('H*',$self->{users}{$user}{shared_key})."\n";
-               print STDERR "\n";
+         eval {
+            if ( $message->{method} eq 'newUser' ) {
+                $self->new_user(
+                    new_user       => $message->{new_user},
+                    new_password   => $message->{new_password},
+                    admin_user     => $message->{admin_user},
+                    admin_password => $message->{admin_password},
+                );
             }
-         }
+            elsif ( $message->{method} eq 'deleteUser' ) {
+                $self->delete_user(
+                    user           => $message->{user},
+                    admin_user     => $message->{admin_user},
+                    admin_password => $message->{admin_password},
+                );
+            }
+            elsif ( $message->{method} eq 'dump' ) {
+                foreach my $user ( keys %{ $self->{users} } ) {
+                    print STDERR "$user:\n";
+                    print STDERR "key: "
+                      . unpack( 'H*', $self->{users}{$user}{key} ) . "\n";
+                    print STDERR "shared key: "
+                      . unpack( 'H*', $self->{users}{$user}{shared_key} )
+                      . "\n";
+                    print STDERR "\n";
+                }
+            }
+        };
+        if ( $@ ) {
+           $handle->push_write(
+               json => {
+                   error => $@,
+               }
+           );
+           $handle->push_write ("\012");
+        }
       });
 
       # ------ Socket closed ------
