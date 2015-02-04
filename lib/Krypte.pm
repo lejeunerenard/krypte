@@ -343,12 +343,21 @@ sub tcp_handler {
                 );
             }
             elsif ( $message->{method} eq 'dump' ) {
+                print STDERR "===== Users =====\n";
                 foreach my $user ( keys %{ $self->{users} } ) {
                     print STDERR "$user:\n";
                     print STDERR "key: "
                       . unpack( 'H*', $self->{users}{$user}{key} ) . "\n";
                     print STDERR "shared key: "
                       . unpack( 'H*', $self->{users}{$user}{shared_key} )
+                      . "\n";
+                    print STDERR "\n";
+                }
+                print STDERR "===== Sessions =====\n";
+                foreach my $session ( keys %{ $self->{sessions} } ) {
+                    print STDERR unpack( 'H*',$session) . "\n";
+                    print STDERR "shared key: "
+                      . unpack( 'H*', $self->{sessions}{$session}{shared_key} )
                       . "\n";
                     print STDERR "\n";
                 }
