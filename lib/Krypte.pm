@@ -226,11 +226,31 @@ sub create_session {
 
    # Create timer for the session
    $self->{sessions}{$session_token}{timer} = AE::timer $self->{session_time_out}, 0, sub {
-      delete $self->{sessions}{$session_token};
+      $self->end_session( session_token => $session_token );
    };
 
    # Return the session token so the application can use it
    return $session_token;
+}
+
+=head2 end_session
+
+C<end_session> will completely remove a given session token from memory. If this isn't called by the client, it will be automatically called after a hardcoded timeout period. C<end_session> takes the unpacked for of the token as the C<session_token> parameter.
+
+=cut
+
+sub end_session {
+   my $self = shift;
+   my %options = @_;
+   my $session_token = $options{session_token};
+
+   # Die if inputs are not set
+   foreach ('session_token') {
+      die $_.' must be defined' unless defined $options{$_};
+   }
+   undef %options;
+
+   delete $self->{sessions}{$session_token};
 }
 
 sub new {
@@ -316,6 +336,11 @@ sub tcp_handler {
                     # Extra newline
                     $handle->push_write ("\012");
                 }
+            }
+            elsif ( $message->{method} eq 'endSession' ) {
+                $self->end_session(
+                   session_token => pack( 'H*', $message->{sessionToken} ),
+                );
             }
             elsif ( $message->{method} eq 'dump' ) {
                 foreach my $user ( keys %{ $self->{users} } ) {
