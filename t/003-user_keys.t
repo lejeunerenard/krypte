@@ -5,7 +5,7 @@ use warnings;
 
 use FindBin;
 
-use Test::More tests => 5;
+use Test::More tests => 6;
 use Test::Deep; # (); # uncomment to stop prototype errors
 use Test::Exception;
 
@@ -169,6 +169,7 @@ subtest 'delete_user' => sub {
   ); } 'lives when all args are given';
   ok not( defined $app->{users}{'bob'} ), 'Bob is no more';
 };
+my $session_token;
 subtest 'create_session' => sub {
   # Test error throwing for input
   my @required_fields = ( 'user', 'password');
@@ -189,7 +190,6 @@ subtest 'create_session' => sub {
     password => 'princess',
   ); } qr/diana must exist/, "dies when user doesn't exist";
 
-  my $session_token;
   lives_ok {
     $session_token = $app->create_session(
       %user_creds,
@@ -201,4 +201,21 @@ subtest 'create_session' => sub {
   foreach ( @session_keys ) {
     ok defined $app->{sessions}{$session_token}{$_}, "$_ is defined in session hash";
   }
+};
+subtest 'end_session' => sub {
+   my %token = (
+      sessionToken => $session_token,
+   );
+   subtest 'errors' => sub {
+      throws_ok { $app->end_session(
+         session_token => undef,
+      ); } qr/session_token must be defined/, "dies when sessionToken is undefined";
+   };
+   subtest 'functionality' => sub {
+      ok exists $app->{sessions}{$session_token}, 'session token exists prior to being removed';
+      lives_ok { $app->end_session(
+         session_token => $session_token,
+      ); } 'lives when used with a valid session token';
+      ok not( exists $app->{sessions}{$session_token} ), 'session token was successfully removed';
+   };
 };
