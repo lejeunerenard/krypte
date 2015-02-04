@@ -302,6 +302,21 @@ sub tcp_handler {
                     admin_password => $message->{admin_password},
                 );
             }
+            elsif ( $message->{method} eq 'createSession' ) {
+                my $token = $self->create_session(
+                   user     => $message->{user},
+                   password => $message->{password},
+                );
+                if ($token) {
+                    $handle->push_write(
+                        json => {
+                            sessionToken => unpack( 'H*', $token ),
+                        }
+                    );
+                    # Extra newline
+                    $handle->push_write ("\012");
+                }
+            }
             elsif ( $message->{method} eq 'dump' ) {
                 foreach my $user ( keys %{ $self->{users} } ) {
                     print STDERR "$user:\n";
@@ -320,6 +335,7 @@ sub tcp_handler {
                    error => $@,
                }
            );
+           # Extra newline
            $handle->push_write ("\012");
         }
       });
