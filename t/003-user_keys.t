@@ -5,8 +5,10 @@ use warnings;
 
 use FindBin;
 
-use Test::More tests => 38;
+use Test::More tests => 5;
 use Test::Deep; # (); # uncomment to stop prototype errors
+use Test::Exception;
+
 use Data::Dumper;
 
 use Krypte;
