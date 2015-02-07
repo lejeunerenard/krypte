@@ -365,6 +365,8 @@ sub put_data {
    # Get the key for the data
    my $sha1_key = Digest::SHA1::sha1_hex($data);
 
+   print STDERR "sha1_key: ".Dumper($sha1_key)."\n";
+
    # Check to see if this data has already been stored
    $self->dbh->select( 'data', ['sha1_key'], { sha1_key => $sha1_key, },sub {
       my($dbh, $rows, $rv) = @_;
@@ -458,95 +460,101 @@ sub tcp_handler {
       $handle->on_read(sub {
          my ($hdl) = @_;
          print STDERR "hdl->rbuf: ".Dumper($hdl->rbuf)."\n";
-         my $message = from_json($hdl->rbuf);
+         my $message;
+         eval {
+            $message = from_json( $hdl->rbuf );
+         };
          undef $hdl->rbuf; # Clear buffer so it doesnt stack
 
-         print "Received: " .Dumper($message)."\n";
+         # Check that the buffer was valid JSON
+         if ( ! $@ ) {
+            print "Received: " .Dumper($message)."\n";
 
-         eval {
-            if ( $message->{method} eq 'newUser' ) {
-                $self->new_user(
-                    new_user       => $message->{new_user},
-                    new_password   => $message->{new_password},
-                    admin_user     => $message->{admin_user},
-                    admin_password => $message->{admin_password},
-                );
-            }
-            elsif ( $message->{method} eq 'deleteUser' ) {
-                $self->delete_user(
-                    user           => $message->{user},
-                    admin_user     => $message->{admin_user},
-                    admin_password => $message->{admin_password},
-                );
-            }
-            elsif ( $message->{method} eq 'createSession' ) {
-                my $token = $self->create_session(
-                   user     => $message->{user},
-                   password => $message->{password},
-                );
-                if ($token) {
-                    $handle->push_write(
-                        json => {
-                            sessionToken => unpack( 'H*', $token ),
-                        }
-                    );
-                    # Extra newline
-                    $handle->push_write ("\012");
-                }
-            }
-            elsif ( $message->{method} eq 'endSession' ) {
-                $self->end_session(
-                   session_token => pack( 'H*', $message->{sessionToken} ),
-                );
-            }
-            elsif ( $message->{method} eq 'putData' ) {
-               my $packed_token = ( defined $message->{sessionToken} ) ? pack( 'H*', $message->{sessionToken} ) : undef;
-                $self->put_data(
-                   session_token => $packed_token,
-                   user => $message->{user},
-                   password => $message->{password},
-                   data => $message->{data},
-                )->then(sub {
-                   $handle->push_write(
-                      json => {
-                         status => 'success',
-                         key => $_[0],
-                      }
+            eval {
+               if ( $message->{method} eq 'newUser' ) {
+                   $self->new_user(
+                       new_user       => $message->{new_user},
+                       new_password   => $message->{new_password},
+                       admin_user     => $message->{admin_user},
+                       admin_password => $message->{admin_password},
                    );
-                   # Extra newline
-                   $handle->push_write ("\012");
-                }, sub {
-                   $handle->push_write(
-                      json => {
-                         status => 'error',
-                         reason => $_[0],
-                      }
+               }
+               elsif ( $message->{method} eq 'deleteUser' ) {
+                   $self->delete_user(
+                       user           => $message->{user},
+                       admin_user     => $message->{admin_user},
+                       admin_password => $message->{admin_password},
                    );
-                   # Extra newline
-                   $handle->push_write ("\012");
-                });
-            }
-            elsif ( $message->{method} eq 'dump' ) {
-                print STDERR "===== Users =====\n";
-                foreach my $user ( keys %{ $self->{users} } ) {
-                    print STDERR "$user:\n";
-                    print STDERR "key: "
-                      . unpack( 'H*', $self->{users}{$user}{key} ) . "\n";
-                    print STDERR "shared key: "
-                      . unpack( 'H*', $self->{users}{$user}{shared_key} )
-                      . "\n";
-                    print STDERR "\n";
-                }
-                print STDERR "===== Sessions =====\n";
-                foreach my $session ( keys %{ $self->{sessions} } ) {
-                    print STDERR unpack( 'H*',$session) . "\n";
-                    print STDERR "shared key: "
-                      . unpack( 'H*', $self->{sessions}{$session}{shared_key} )
-                      . "\n";
-                    print STDERR "\n";
-                }
-            }
-        };
+               }
+               elsif ( $message->{method} eq 'createSession' ) {
+                   my $token = $self->create_session(
+                      user     => $message->{user},
+                      password => $message->{password},
+                   );
+                   if ($token) {
+                       $handle->push_write(
+                           json => {
+                               sessionToken => unpack( 'H*', $token ),
+                           }
+                       );
+                       # Extra newline
+                       $handle->push_write ("\012");
+                   }
+               }
+               elsif ( $message->{method} eq 'endSession' ) {
+                   $self->end_session(
+                      session_token => pack( 'H*', $message->{sessionToken} ),
+                   );
+               }
+               elsif ( $message->{method} eq 'putData' ) {
+                  my $packed_token = ( defined $message->{sessionToken} ) ? pack( 'H*', $message->{sessionToken} ) : undef;
+                   $self->put_data(
+                      session_token => $packed_token,
+                      user => $message->{user},
+                      password => $message->{password},
+                      data => $message->{data},
+                   )->then(sub {
+                      $handle->push_write(
+                         json => {
+                            status => 'success',
+                            key => $_[0],
+                         }
+                      );
+                      # Extra newline
+                      $handle->push_write ("\012");
+                   }, sub {
+                      $handle->push_write(
+                         json => {
+                            status => 'error',
+                            reason => $_[0],
+                         }
+                      );
+                      # Extra newline
+                      $handle->push_write ("\012");
+                   });
+               }
+               elsif ( $message->{method} eq 'dump' ) {
+                   print STDERR "===== Users =====\n";
+                   foreach my $user ( keys %{ $self->{users} } ) {
+                       print STDERR "$user:\n";
+                       print STDERR "key: "
+                         . unpack( 'H*', $self->{users}{$user}{key} ) . "\n";
+                       print STDERR "shared key: "
+                         . unpack( 'H*', $self->{users}{$user}{shared_key} )
+                         . "\n";
+                       print STDERR "\n";
+                   }
+                   print STDERR "===== Sessions =====\n";
+                   foreach my $session ( keys %{ $self->{sessions} } ) {
+                       print STDERR unpack( 'H*',$session) . "\n";
+                       print STDERR "shared key: "
+                         . unpack( 'H*', $self->{sessions}{$session}{shared_key} )
+                         . "\n";
+                       print STDERR "\n";
+                   }
+               }
+           };
+        }
         if ( $@ ) {
            $handle->push_write(
                json => {
