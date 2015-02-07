@@ -365,8 +365,6 @@ sub put_data {
    # Get the key for the data
    my $sha1_key = Digest::SHA1::sha1_hex($data);
 
-   print STDERR "sha1_key: ".Dumper($sha1_key)."\n";
-
    # Check to see if this data has already been stored
    $self->dbh->select( 'data', ['sha1_key'], { sha1_key => $sha1_key, },sub {
       my($dbh, $rows, $rv) = @_;
@@ -388,6 +386,80 @@ sub put_data {
       }
    });
 
+
+   return $deferred->promise;
+}
+
+=head2 get_data
+
+Summary of get_data
+
+=cut
+
+sub get_data {
+   my $self = shift;
+   my %options = @_;
+
+   # Die if credentials are invalid
+   die "Credentials are invalid" unless $self->validate_credentials(@_);
+
+   # Get the SharedKey
+   my $session_token = $options{session_token};
+   my $user = $options{user};
+   my $password = $options{password};
+
+   my $key = $options{key};
+
+   my $shared_key;
+
+   if ( $user ) {
+      $shared_key = $self->get_shared_key( $user, $password );
+
+      # Clean up
+      undef $user;
+      undef $password;
+   } else {
+      $shared_key = $self->get_shared_key( $session_token );
+
+      # Clean up
+      undef $session_token;
+   }
+
+   # ----- Encrypt data -----
+   my $cipher = Crypt::CBC->new(
+      -key => $shared_key,
+      -cipher => 'Blowfish',
+   );
+
+   my $deferred = deferred;
+
+   # GET THE DATA
+   $self->dbh->select( 'data', ['value'], { sha1_key => $key, },sub {
+      my($dbh, $rows, $rv) = @_;
+
+      # First check that there is no error
+      if ( $@ ) {
+         $deferred->reject($@);
+      } else {
+         # Check that something was actually found
+         if ( $#$rows == 0 ) {
+            # Get data from rows
+            my $encrypted_data = $rows->[0][0];
+            my $data = $cipher->decrypt( $encrypted_data );
+            # Get the key for the data
+            my $sha1_key = Digest::SHA1::sha1_hex($data);
+
+            # Now check if the key matchs the data
+            if ( $sha1_key ne $key ) {
+               $deferred->reject('Data not decrypted successfully');
+            }
+
+            $deferred->resolve($data);
+         } else {
+            $deferred->reject('data not found');
+         }
+      }
+   });
 
    return $deferred->promise;
 }
@@ -533,24 +605,51 @@ sub tcp_handler {
                       $handle->push_write ("\012");
                    });
                }
+               elsif ( $message->{method} eq 'getData' ) {
+                  my $packed_token = ( defined $message->{sessionToken} ) ? pack( 'H*', $message->{sessionToken} ) : undef;
+                   $self->get_data(
+                      session_token => $packed_token,
+                      user => $message->{user},
+                      password => $message->{password},
+                      key => $message->{key},
+                   )->then(sub {
+                      $handle->push_write(
+                         json => {
+                            status => 'success',
+                            data => $_[0],
+                         }
+                      );
+                      # Extra newline
+                      $handle->push_write ("\012");
+                   }, sub {
+                      $handle->push_write(
+                         json => {
+                            status => 'error',
+                            reason => $_[0],
+                         }
+                      );
+                      # Extra newline
+                      $handle->push_write ("\012");
+                   });
+               }
                elsif ( $message->{method} eq 'dump' ) {
-                   print STDERR "===== Users =====\n";
+                   print "===== Users =====\n";
                    foreach my $user ( keys %{ $self->{users} } ) {
-                       print STDERR "$user:\n";
-                       print STDERR "key: "
+                       print "$user:\n";
+                       print "key: "
                          . unpack( 'H*', $self->{users}{$user}{key} ) . "\n";
-                       print STDERR "shared key: "
+                       print "shared key: "
                          . unpack( 'H*', $self->{users}{$user}{shared_key} )
                          . "\n";
-                       print STDERR "\n";
+                       print "\n";
                    }
-                   print STDERR "===== Sessions =====\n";
+                   print "===== Sessions =====\n";
                    foreach my $session ( keys %{ $self->{sessions} } ) {
-                       print STDERR unpack( 'H*',$session) . "\n";
-                       print STDERR "shared key: "
+                       print unpack( 'H*',$session) . "\n";
+                       print "shared key: "
                          . unpack( 'H*', $self->{sessions}{$session}{shared_key} )
                          . "\n";
-                       print STDERR "\n";
+                       print "\n";
                    }
                }
            };
