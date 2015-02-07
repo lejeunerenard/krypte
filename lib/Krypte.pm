@@ -7,12 +7,15 @@ use lib "$FindBin::Bin/../local/lib/perl5";
 
 use AnyEvent::Socket;
 use AnyEvent::Handle;
+use AnyEvent::DBI::Abstract;
 
 use JSON;
+use Promises qw(deferred);
 
 # Cryptography Modules
 use Crypt::CBC;
 use Crypt::Random::Seed;
+use Digest::SHA1;
 
 use Data::Dumper;
 
@@ -145,7 +148,7 @@ sub new_user {
 
 =head2 get_shared_key
 
-Given a user and password, get_shared_key will return the unencrypted shared key for the system.
+Given a user and password or given a token, get_shared_key will return the unencrypted shared key for the system.
 
 Be careful to handle the shared key with care. It should never be left anywhere (memory or disk) unencrypted.
 
@@ -153,37 +156,66 @@ Be careful to handle the shared key with care. It should never be left anywhere 
 
 sub get_shared_key {
    my $self = shift;
-   my $user = shift;
+   my $user_or_token = shift;
    my $password = shift;
+   my ( $user, $token );
 
-   # Die if inputs are not set
-   die 'User and Password must be defined' unless defined( $user ) and defined( $password );
+   # If password is undef, then check if $user_or_token is in the token hash
+   # else set the user
+   if ( not( defined $password ) and exists $self->{sessions}{$user_or_token} ) {
+      $token = $user_or_token;
+   } else {
+      $user = $user_or_token;
+   }
 
-   # Die if user doesnt exist
-   die 'User must exist' unless defined $self->{users}{$user};
+   # Get key and encrypted key from a session or a individual user
+   my ( $key, $encrypted_shared_key );
 
-   # ----- Get UserKey with password -----
-   # Create cipher for getting the UserKey
-   my $user_cipher = Crypt::CBC->new(
-      -key => $password,
-      -cipher => 'Blowfish',
-   );
-   my $user_key = $user_cipher->decrypt($self->{users}{$user}{key});
-   # Garbage collect, just in case
-   undef $user_cipher;
-   undef $password;
+   if ( $token ) {
+      # In the case of a session, the token is the key and the SharedKey is
+      # encrypted by the token.
+      $key                  = $token;
+      $encrypted_shared_key = $self->{sessions}{$token}{shared_key};
 
-   # ----- Get SharedKey with user key -----
+      # Refresh the timer too
+      $self->{sessions}{$token}{timer} = AE::timer $self->{session_time_out}, 0,
+         sub {
+            $self->end_session( session_token => $token );
+         };
+   } else {
+      # Die if inputs are not set
+      die 'User and Password must be defined'
+        unless defined($user)
+        and defined($password);
+
+      # Die if user doesnt exist
+      die 'User must exist' unless defined $self->{users}{$user};
+
+      # ----- Get UserKey with password -----
+      # Create cipher for getting the UserKey
+      my $user_cipher = Crypt::CBC->new(
+          -key    => $password,
+          -cipher => 'Blowfish',
+      );
+      $key                  = $user_cipher->decrypt( $self->{users}{$user}{key} );
+      $encrypted_shared_key = $self->{users}{$user}{shared_key};
+
+      # Garbage collect, just in case
+      undef $user_cipher;
+      undef $password;
+      undef $user;
+   }
+
+   # ----- Get SharedKey with key -----
    # Create cipher for getting the SharedKey
    my $shared_cipher = Crypt::CBC->new(
-      -key => $user_key,
+      -key => $key,
       -cipher => 'Blowfish',
    );
-   my $shared_key = $shared_cipher->decrypt($self->{users}{$user}{shared_key});
+   my $shared_key = $shared_cipher->decrypt($encrypted_shared_key);
    # Garbage collect, just in case
    undef $shared_cipher;
-   undef $user_key;
-   undef $user;
+   undef $encrypted_shared_key;
 
    return $shared_key;
 }
@@ -253,18 +285,142 @@ sub end_session {
    delete $self->{sessions}{$session_token};
 }
 
+=head2 validate_credentials
+
+C<validate_credentials> will return a boolean based on whether the
+provided credentials are valid or not. User and password is only validated
+by checking to see if the user exists in the current hash.
+
+=cut
+
+sub validate_credentials {
+   my $self = shift;
+   my %options = @_;
+   my $session_token = $options{session_token};
+   my $user = $options{user};
+   my $password = $options{password};
+
+   if ( defined $user ) {
+      # Return 0 if user doesnt exist
+      return 0 unless defined $self->{users}{$user};
+
+      # A user must have a password to valid
+      return 0 unless defined $password;
+
+      # Else return
+      return 1;
+   } else {
+      # Return 0 if token doesnt exist
+      return 0 unless defined $self->{sessions}{$session_token};
+
+      # Else return
+      return 1;
+   }
+}
+
+=head2 put_data
+
+C<put_data> will take data and credentials to store the data encrypted into the database
+
+=cut
+
+sub put_data {
+   my $self = shift;
+   my %options = @_;
+
+   # Die if credentials are invalid
+   die "Credentials are invalid" unless $self->validate_credentials(@_);
+
+   # Get the SharedKey
+   my $session_token = $options{session_token};
+   my $user = $options{user};
+   my $password = $options{password};
+
+   my $data = $options{data};
+
+   my $shared_key;
+
+   if ( $user ) {
+      $shared_key = $self->get_shared_key( $user, $password );
+
+      # Clean up
+      undef $user;
+      undef $password;
+   } else {
+      $shared_key = $self->get_shared_key( $session_token );
+
+      # Clean up
+      undef $session_token;
+   }
+
+   # ----- Encrypt data -----
+   my $cipher = Crypt::CBC->new(
+      -key => $shared_key,
+      -cipher => 'Blowfish',
+   );
+   my $encrypted_data = $cipher->encrypt( $data );
+
+   my $deferred = deferred;
+
+   # Get the key for the data
+   my $sha1_key = Digest::SHA1::sha1_hex($data);
+
+   # Check to see if this data has already been stored
+   $self->dbh->select( 'data', ['sha1_key'], { sha1_key => $sha1_key, },sub {
+      my($dbh, $rows, $rv) = @_;
+
+      # If its already found then just return the hash
+      if ( $#$rows == 0 ) {
+         $deferred->resolve($sha1_key);
+      } else {
+         $dbh->insert('data', { value => $encrypted_data,
+           sha1_key => $sha1_key }, sub {
+            my($dbh, undef, $rv) = @_;
+
+            if ( $@ ) {
+               $deferred->reject($@);
+            } else {
+               $deferred->resolve($sha1_key);
+            }
+         });
+      }
+   });
+
+
+   return $deferred->promise;
+}
+
 sub new {
    my $class = shift;
    my %options = @_;
-   my $session_time_out = $options{session_time_out} || 120;
+
    my $self = {
       crypt_source => Crypt::Random::Seed->new( NonBlocking => 1 ),
       users => {},
-      session_time_out => $session_time_out,
+      dsn => $options{dsn},
+      db_username => $options{db_username},
+      db_password => $options{db_password},
+      session_time_out => $options{session_time_out} || 120,
    };
 
    bless $self, $class;
    return $self;
+}
+
+=head2 dbh
+
+C<dbh> return database handler based on the app's config. If the
+connection has already been created, return that instead.
+
+=cut
+
+sub dbh {
+   my $self = shift;
+
+   return $self->{dbh} if defined $self->{dbh};
+
+   $self->{dbh} = AnyEvent::DBI::Abstract->new($self->{dsn}, $self->{db_username}, $self->{db_password}, AutoCommit => 1);
+   return $self->{dbh};
 }
 
 sub prepare_handler {
@@ -301,6 +457,7 @@ sub tcp_handler {
       # ------ Receive Message ------
       $handle->on_read(sub {
          my ($hdl) = @_;
+         print STDERR "hdl->rbuf: ".Dumper($hdl->rbuf)."\n";
          my $message = from_json($hdl->rbuf);
          undef $hdl->rbuf; # Clear buffer so it doesnt stack
 
@@ -341,6 +498,33 @@ sub tcp_handler {
                 $self->end_session(
                    session_token => pack( 'H*', $message->{sessionToken} ),
                 );
+            }
+            elsif ( $message->{method} eq 'putData' ) {
+               my $packed_token = ( defined $message->{sessionToken} ) ? pack( 'H*', $message->{sessionToken} ) : undef;
+                $self->put_data(
+                   session_token => $packed_token,
+                   user => $message->{user},
+                   password => $message->{password},
+                   data => $message->{data},
+                )->then(sub {
+                   $handle->push_write(
+                      json => {
+                         status => 'success',
+                         key => $_[0],
+                      }
+                   );
+                   # Extra newline
+                   $handle->push_write ("\012");
+                }, sub {
+                   $handle->push_write(
+                      json => {
+                         status => 'error',
+                         reason => $_[0],
+                      }
+                   );
+                   # Extra newline
+                   $handle->push_write ("\012");
+                });
             }
             elsif ( $message->{method} eq 'dump' ) {
                 print STDERR "===== Users =====\n";
