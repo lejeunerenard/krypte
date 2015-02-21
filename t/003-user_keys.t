@@ -5,20 +5,65 @@ use warnings;
 
 use FindBin;
 
-use Test::More tests => 6;
+use Test::More;
 use Test::Deep; # (); # uncomment to stop prototype errors
 use Test::Exception;
 
+use FindBin qw($RealBin);
+
 use Data::Dumper;
+
+plan skip_all => 'DB credentials not given' unless defined $ENV{DB_USER} and defined $ENV{DB_PASSWORD};
 
 use Krypte;
 
-my $app = new Krypte;
+my $test_db_name = 'krypte_test';
+
+my $user = $ENV{DB_USER};
+my $password = $ENV{DB_PASSWORD};
+
+my $app = new Krypte(
+   dsn => "dbi:mysql:",
+   db_username => $user || '',
+   db_password => $password || '',
+);
+
+subtest 'setup' => sub {
+   my $cv = AE::cv;
+   $app->dbh->exec("DROP DATABASE IF EXISTS $test_db_name", sub {
+      my($dbh, $rows, $rv) = @_;
+
+      if ( $rv ) {
+         pass 'drop test db';
+         $app->dbh->exec("CREATE DATABASE $test_db_name", sub {
+            my($dbh, $rows, $rv) = @_;
+
+            if ( $rv ) {
+               pass 'create test db';
+               $app->dbh->exec("use $test_db_name", sub {
+                  my($dbh, $rows, $rv) = @_;
+
+                  if ( $rv ) {
+                     pass 'use test db';
+                     is
+                        system( "mysql -u$user --password=$password $test_db_name -se '\\. $RealBin/../sql/fixtures/db-structure.sql'" ), 0, 'Fixture loaded';
+                        $cv->broadcast;
+                  }
+               });
+            }
+         });
+      } else {
+         fail 'drop test db: '. $@;
+      }
+   });
+   $cv->wait;
+};
 
 my $admin_user_password = 'underground';
 my $admin_user_key = 'im a user key';
 my $tmp_shared_key = 'ooo lala shared key';
 subtest 'create_user_hash' => sub {
+
   throws_ok { $app->create_user_hash(
         user => undef,
         user_password => $admin_user_password,
@@ -48,8 +93,29 @@ subtest 'create_user_hash' => sub {
         user_password => $admin_user_password,
         user_key => $admin_user_key,
         shared_key => $tmp_shared_key,
+        is_admin => 1,
      ) } 'lives when used properly';
-  is_deeply [ sort keys $app->{users}{'admin'} ], [ 'is_admin', 'key', 'shared_key' ], 'Created user has proper hash structure';
+  my $cv = AE::cv;
+  my $admin_hash = $app->dbh->select('users', [ 'username', 'password', 'user_key', 'shared_key' ], sub {
+        my ($dbh, $rows, $rv) = @_;
+
+        if ($rv) {
+           if ($#$rows == 0) {
+              my $found_undef = 0;
+              foreach my $value ( @{ $rows->[0] } ) {
+                 if ( not defined $value ) {
+                    $found_undef = 1;
+                    last;
+                 }
+              }
+              is $found_undef, 0, 'All columns were set';
+              is $rows->[0][0], 'admin', 'username was correctly set';
+              is $rows->[0][1], Digest::SHA1::sha1_hex($admin_user_password), 'password was correctly hashed';
+              $cv->broadcast;
+           }
+        }
+     });
+  $cv->wait;
 };
 
 # Setup temp admin
@@ -219,3 +285,4 @@ subtest 'end_session' => sub {
       ok not( exists $app->{sessions}{$session_token} ), 'session token was successfully removed';
    };
 };
+done_testing;

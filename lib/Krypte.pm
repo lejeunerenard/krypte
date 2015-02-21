@@ -59,13 +59,32 @@ sub create_user_hash {
       -key => $user_password,
       -cipher => 'Blowfish',
    );
+
+   my $deferred = deferred;
+
    # Store user info into the keys hash
-   $self->{users}{$user} = {
-      key => $user_cipher->encrypt($user_key),
-      is_admin => $is_admin,
+   my $enc_user_key = $user_cipher->encrypt($user_key);
+   $self->dbh->insert('users', {
+      username => $user,
+      password => Digest::SHA1::sha1_hex($user_password),
+      user_key => $enc_user_key,
       shared_key => $enc_shared_key,
-   };
+      is_admin => $is_admin,
+   }, sub {
+      my($dbh, $rows, $rv) = @_;
+
+      if ( $@ ) {
+         $deferred->reject($@);
+      } elsif ( $rv ) {
+         $deferred->resolve()
+      } else {
+         $deferred->reject('Something went wrong creating the user');
+      }
+   });
+
    undef $user_key;
+
+   return $deferred->promise;
 }
 
 =head2 delete_user
