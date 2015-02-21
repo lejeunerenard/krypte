@@ -107,16 +107,37 @@ sub delete_user {
    }
    undef %options;
 
-   # Die if $admin_user is doesnt exist
-   die "$admin_user doesn't exist" unless $self->{users}{$admin_user};
+   my $deferred = deferred;
 
-   # Die if $admin_user is not an admin
-   die '$admin_user is not an admin' unless $self->{users}{$admin_user}{is_admin};
+   $self->dbh->select( 'users', ['username', 'password', 'is_admin', 'shared_key'], { username => $admin_user }, sub {
+      my($dbh, $rows, $rv) = @_;
 
-   # Die if $user is doesnt exist
-   die "$user doesn't exist" unless $self->{users}{$user};
+      # Die if $admin_user is doesnt exist
+      die "$admin_user doesn't exist" unless $#$rows >= 0;
 
-   delete $self->{users}{$user};
+      # Die if $admin_user is not an admin
+      die '$admin_user is not an admin'
+         # Check is_admin column
+         unless $rows->[0][2];
+
+      $self->dbh->select( 'users', ['username', 'password', 'is_admin', 'shared_key'], { username => $user }, sub {
+         my($dbh, $rows, $rv) = @_;
+
+         # Die if $user is doesnt exist
+         die "$user doesn't exist" unless $#$rows >= 0;
+
+         $self->dbh->delete( 'users', { username => $user }, sub {
+            my($dbh, $rows, $rv) = @_;
+            if ( $rv ) {
+               $deferred->resolve();
+            } else {
+               $deferred->reject();
+            }
+         });
+      });
+   });
+
+   return $deferred->promise;
 }
 
 =head2 $self->new_user
