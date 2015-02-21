@@ -3,6 +3,7 @@ package Krypte;
 use strict;
 use warnings;
 
+use FindBin;
 use lib "$FindBin::Bin/../local/lib/perl5";
 
 use AnyEvent::Socket;
