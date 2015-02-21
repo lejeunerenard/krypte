@@ -3,13 +3,14 @@
 use strict;
 use warnings;
 
-use FindBin;
+use FindBin qw($RealBin);
+use lib "$RealBin/../local/lib/perl5";
 
 use Test::More;
 use Test::Deep; # (); # uncomment to stop prototype errors
 use Test::Exception;
 
-use FindBin qw($RealBin);
+use Promises qw(collect);
 
 use Data::Dumper;
 
@@ -28,6 +29,10 @@ my $app = new Krypte(
    db_password => $password || '',
 );
 
+sub load_fixture {
+   is system( "mysql -u$user --password=$password $test_db_name -se '\\. $RealBin/../sql/fixtures/db-structure.sql'" ), 0, 'Fixture loaded';
+}
+
 subtest 'setup' => sub {
    my $cv = AE::cv;
    $app->dbh->exec("DROP DATABASE IF EXISTS $test_db_name", sub {
@@ -45,9 +50,8 @@ subtest 'setup' => sub {
 
                   if ( $rv ) {
                      pass 'use test db';
-                     is
-                        system( "mysql -u$user --password=$password $test_db_name -se '\\. $RealBin/../sql/fixtures/db-structure.sql'" ), 0, 'Fixture loaded';
-                        $cv->broadcast;
+                     load_fixture;
+                     $cv->broadcast;
                   }
                });
             }
@@ -143,11 +147,14 @@ subtest 'get_shared_key' => sub {
   } );
   $cv->wait;
 
-  # Create default admin
-  $app->prepare_handler(undef,undef,undef);
 };
 
 subtest 'new_user' => sub {
+
+   load_fixture;
+   # Create default admin
+   $app->prepare_handler(undef,undef,undef);
+
   throws_ok { $app->new_user(
         admin_user => undef,
         admin_password => 'pw',
@@ -172,44 +179,135 @@ subtest 'new_user' => sub {
         new_user => 'bob',
         new_password => undef,
      ); } qr/new_password must be defined/, 'dies when new_password is undefined';
-  throws_ok { $app->new_user(
+  throws_ok {
+     my $cv = AE::cv;
+     $app->new_user(
         new_user => 'bob',
         new_password => 'thebuilder',
         admin_user => 'bob',
         admin_password => 'pw',
-     ); } qr/doesn't exist/, 'dies when given non-existent admin';
-  lives_ok { $app->new_user(
+     )->then( undef, sub {
+        $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/doesn't exist/, 'dies when given non-existent admin';
+  lives_ok {
+     my $cv = AE::cv;
+     $app->new_user(
         new_user => 'bob',
         new_password => 'thebuilder',
         admin_user => 'admin',
         admin_password => 'underground',
-     ) } 'lives when used properly';
-  throws_ok { $app->new_user(
+     )->then(sub {
+        $cv->send(shift);
+     }, sub {
+        $cv->croak(shift);
+     });
+     $cv->wait;
+  } 'lives when used properly';
+  throws_ok { 
+     my $cv = AE::cv;
+     $app->new_user(
         new_user => 'alice',
         new_password => 'inwonderland',
         admin_user => 'bob',
         admin_password => 'thebuilder',
-     ); } qr/is not an admin/, 'dies when given a non-admin user as admin';
-  is_deeply [ sort keys $app->{users}{'bob'} ], [ 'is_admin', 'key', 'shared_key' ], 'Created user has proper hash structure';
-  is $app->get_shared_key('admin','underground'), $app->get_shared_key('bob','thebuilder'), 'Admin user and Bob have the same uncrypted shared_key';
-  isnt $app->{users}{'bob'}{is_admin}, 1, 'Bob isn\'t an admin';
+     )->then(undef, sub {
+        $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/is not an admin/, 'dies when given a non-admin user as admin';
 
+  my $cv = AE::cv;
+  $app->dbh->select('users', [ 'username', 'password', 'user_key', 'shared_key', 'is_admin' ], {
+        username => 'bob',
+     }, sub {
+        my ($dbh, $rows, $rv) = @_;
+
+        if ($rv) {
+           if ($#$rows == 0) {
+              is $rows->[0][1], Digest::SHA1::sha1_hex('thebuilder'), 'password was correctly hashed';
+              ok $rows->[0][2], 'user_key is truthy';
+              ok $rows->[0][3], 'shared_key is truthy';
+              isnt $rows->[0][4], 1, 'Bob isn\'t an admin';
+              $cv->broadcast;
+           }
+        } else {
+           fail 'Retrieving created user';
+        }
+     });
+  $cv->wait;
+
+  $cv = AE::cv;
+  $cv->begin;
+  collect(
+     $app->get_shared_key('admin','underground'),
+     $app->get_shared_key('bob','thebuilder')
+  )->then(sub {
+     is $_[0][0], $_[1][0], 'Admin user and Bob have the same decrypted shared_key';
+     $cv->end;
+  }, sub {
+     fail 'Admin user and Bob have the same decrypted shared_key';
+     $cv->end;
+  });
+
+  $cv->begin;
   $app->new_user(
      new_user => 'alice',
      new_password => 'inwonderland',
      new_is_admin => 1,
      admin_user => 'admin',
      admin_password => 'underground',
-  );
-  is $app->{users}{'alice'}{is_admin}, 1, 'Alice is an admin';
+  )->then(sub {
+     $app->dbh->select('users', [ 'username', 'password', 'user_key', 'shared_key', 'is_admin' ], {
+           username => 'alice',
+        }, sub {
+           my ($dbh, $rows, $rv) = @_;
+
+           if ($rv) {
+              if ($#$rows == 0) {
+                 is $rows->[0][4], 1, 'Alice is an admin';
+                 $cv->end;
+              }
+           } else {
+              fail 'Alice is an admin';
+              $cv->end;
+           }
+        });
+  }, sub {
+     fail 'Alice is an admin';
+     $cv->end;
+  });
+
+  $cv->begin;
   $app->new_user(
      new_user => 'carl',
      new_password => 'sagan',
      new_is_admin => 'isamazing',
      admin_user => 'admin',
      admin_password => 'underground',
-  );
-  is $app->{users}{'alice'}{is_admin}, 1, 'new_is_admin takes a truthy value';
+   )->then(sub {
+     $app->dbh->select('users', [ 'username', 'password', 'user_key', 'shared_key', 'is_admin' ], {
+           username => 'carl',
+        }, sub {
+           my ($dbh, $rows, $rv) = @_;
+
+           if ($rv) {
+              if ($#$rows == 0) {
+                 is $rows->[0][4], 1, 'new_is_admin takes a truthy value';
+                 $cv->end;
+              }
+           } else {
+              fail 'new_is_admin takes a truthy value';
+              $cv->end;
+           }
+        });
+  }, sub {
+     fail 'new_is_admin takes a truthy valueAlice is an admin';
+     $cv->end;
+  });
+
+  $cv->recv;
 };
 
 subtest 'delete_user' => sub {

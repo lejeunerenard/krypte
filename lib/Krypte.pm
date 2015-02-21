@@ -133,36 +133,50 @@ sub new_user {
    my $new_password = $options{new_password};
    my $new_is_admin = ( $options{new_is_admin} ) ? 1 : 0;
 
+   my $deferred = deferred;
+
    # Die if inputs are not set
    foreach ('admin_user', 'admin_password', 'new_user', 'new_password') {
       die $_.' must be defined' unless defined $options{$_};
    }
    undef %options;
 
-   # Die if $admin_user is doesnt exist
-   die '$admin_user doesn\'t exist' unless $self->{users}{$admin_user};
+   $self->dbh->select( 'users', ['username', 'password', 'is_admin', 'shared_key'], { username => $admin_user }, sub {
+       my($dbh, $rows, $rv) = @_;
 
-   # Die if $admin_user is not an admin
-   die '$admin_user is not an admin' unless $self->{users}{$admin_user}{is_admin};
+       # Die if $admin_user is doesnt exist
+       die '$admin_user doesn\'t exist' unless $#$rows >= 0;
 
-   # ----- Get SharedKey with admin creds -----
-   my $shared_key = $self->get_shared_key($admin_user, $admin_password);
-   undef $admin_user;
-   undef $admin_password;
+       # Die if $admin_user is not an admin
+       die '$admin_user is not an admin'
+         # Check is_admin column
+         unless $rows->[0][2];
 
-   # ----- Generate UserKey -----
-   my $user_key = $self->{crypt_source}->random_bytes(512);
+       # ----- Get SharedKey with admin creds -----
+       $self->get_shared_key( $admin_user, $admin_password )->then(sub {
+         my $shared_key = shift;
+         # ----- Generate UserKey -----
+         my $user_key = $self->{crypt_source}->random_bytes(512);
 
-   $self->create_user_hash(
-      user => $new_user,
-      user_key => $user_key,
-      user_password => $new_password,
-      shared_key => $shared_key,
-      is_admin => $new_is_admin,
-   );
-   undef $shared_key;
-   undef $user_key;
-   undef $new_password;
+         $self->create_user_hash(
+             user          => $new_user,
+             user_key      => $user_key,
+             user_password => $new_password,
+             shared_key    => $shared_key,
+             is_admin      => $new_is_admin,
+         );
+         undef $shared_key;
+         undef $user_key;
+         undef $new_password;
+
+         $deferred->resolve();
+       });
+       undef $admin_user;
+       undef $admin_password;
+
+   });
+
+   return $deferred->promise;
 }
 
 =head2 get_shared_key

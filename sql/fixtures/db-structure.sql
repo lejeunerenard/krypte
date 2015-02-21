@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS `data`;
 CREATE TABLE data (
    `sha1_key` varchar(255),
    `value` blob,
@@ -5,6 +6,7 @@ CREATE TABLE data (
    `updated_on` datetime,
    PRIMARY KEY (sha1_key)
 );
+DROP TABLE IF EXISTS `users`;
 CREATE TABLE users (
    `username` varchar(32),
    `password` varchar(255),
