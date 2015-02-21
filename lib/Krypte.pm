@@ -190,6 +190,8 @@ sub get_shared_key {
    # Get key and encrypted key from a session or a individual user
    my ( $key, $encrypted_shared_key );
 
+   my $deferred = deferred;
+
    if ( $token ) {
       # In the case of a session, the token is the key and the SharedKey is
       # encrypted by the token.
@@ -201,42 +203,61 @@ sub get_shared_key {
          sub {
             $self->end_session( session_token => $token );
          };
+
+      # ----- Get SharedKey with key -----
+      # Create cipher for getting the SharedKey
+      my $shared_cipher = Crypt::CBC->new(
+         -key => $key,
+         -cipher => 'Blowfish',
+      );
+      $deferred->resolve($shared_cipher->decrypt($encrypted_shared_key));
    } else {
       # Die if inputs are not set
       die 'User and Password must be defined'
         unless defined($user)
         and defined($password);
 
-      # Die if user doesnt exist
-      die 'User must exist' unless defined $self->{users}{$user};
+      $self->dbh->select( 'users', ['username', 'password', 'user_key', 'shared_key'], { username => $user }, sub {
+          my($dbh, $rows, $rv) = @_;
 
-      # ----- Get UserKey with password -----
-      # Create cipher for getting the UserKey
-      my $user_cipher = Crypt::CBC->new(
-          -key    => $password,
-          -cipher => 'Blowfish',
-      );
-      $key                  = $user_cipher->decrypt( $self->{users}{$user}{key} );
-      $encrypted_shared_key = $self->{users}{$user}{shared_key};
+          # Die if user doesnt exist
+          die 'User must exist' unless $#$rows >= 0;
 
-      # Garbage collect, just in case
-      undef $user_cipher;
-      undef $password;
-      undef $user;
+          # Die if password doesnt match
+          if ( $rows->[0][1] ne Digest::SHA1::sha1_hex($password) ) {
+             die 'Password doesn\'t match';
+          }
+
+          # ----- Get UserKey with password -----
+          # Create cipher for getting the UserKey
+          my $user_cipher = Crypt::CBC->new(
+              -key    => $password,
+              -cipher => 'Blowfish',
+          );
+          $key = $user_cipher->decrypt( $rows->[0][2] );
+          $encrypted_shared_key =  $rows->[0][3];
+
+          # ----- Get SharedKey with key -----
+          # Create cipher for getting the SharedKey
+          my $shared_cipher = Crypt::CBC->new(
+             -key => $key,
+             -cipher => 'Blowfish',
+          );
+          my $shared_key = $shared_cipher->decrypt($encrypted_shared_key);
+          # Garbage collect, just in case
+          undef $shared_cipher;
+          undef $encrypted_shared_key;
+
+          # Garbage collect, just in case
+          undef $user_cipher;
+          undef $password;
+          undef $user;
+
+          $deferred->resolve($shared_key);
+      });
    }
 
-   # ----- Get SharedKey with key -----
-   # Create cipher for getting the SharedKey
-   my $shared_cipher = Crypt::CBC->new(
-      -key => $key,
-      -cipher => 'Blowfish',
-   );
-   my $shared_key = $shared_cipher->decrypt($encrypted_shared_key);
-   # Garbage collect, just in case
-   undef $shared_cipher;
-   undef $encrypted_shared_key;
-
-   return $shared_key;
+   return $deferred->promise;
 }
 
 =head2 create_session
@@ -271,6 +292,15 @@ sub create_session {
       -key => $session_token,
       -cipher => 'Blowfish',
    );
+
+   $self->get_shared_key($user, $password)->then(sub {
+      my $shared_key = shift;
+      $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
+         $shared_key,
+      );
+   }, sub {
+      die "Creating Token ( $session_token ) failed\n";
+   });
    $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
      $self->get_shared_key($user, $password)
    );

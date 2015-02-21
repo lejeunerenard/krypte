@@ -123,10 +123,25 @@ subtest 'get_shared_key' => sub {
   # Validation
   throws_ok { $app->get_shared_key(undef, 'underground'); } qr/User and Password must be defined/, 'dies when user undefined';
   throws_ok { $app->get_shared_key('admin', undef); } qr/User and Password must be defined/, 'dies when password undefined';
-  throws_ok { $app->get_shared_key('bob', 'thebuilder'); } qr/User must exist/, 'dies when given a nonexistent user';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->get_shared_key('bob', 'thebuilder')->then(sub {
+         $cv->send;
+        }, sub { $cv->croak( $_[0] ); });
+     $cv->wait;
+  } qr/User must exist/, 'dies when given a nonexistent user';
 
   # Gives expected shared key
-  is $app->get_shared_key('admin', $admin_user_password), $tmp_shared_key, 'get_shared_key unencrypts user key and shared key correctly';
+  my $cv = AE::cv;
+  $app->get_shared_key('admin', $admin_user_password)->then( sub {
+     my $key = shift;
+     is $key, $tmp_shared_key, 'get_shared_key unencrypts user key and shared key correctly';
+      $cv->send;
+  }, sub {
+      fail 'get_shared_key unencrypts user key and shared key correctly';
+      $cv->send;
+  } );
+  $cv->wait;
 
   # Create default admin
   $app->prepare_handler(undef,undef,undef);
