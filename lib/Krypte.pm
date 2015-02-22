@@ -109,23 +109,15 @@ sub delete_user {
 
    my $deferred = deferred;
 
-   $self->dbh->select( 'users', ['username', 'password', 'is_admin', 'shared_key'], { username => $admin_user }, sub {
-      my($dbh, $rows, $rv) = @_;
-
-      # Die if $admin_user is doesnt exist
-      die "$admin_user doesn't exist" unless $#$rows >= 0;
+   $self->find_user( $admin_user )->then(sub {
+      my $user_hash = shift;
 
       # Die if $admin_user is not an admin
-      die '$admin_user is not an admin'
+      $deferred->reject('$admin_user is not an admin')
          # Check is_admin column
-         unless $rows->[0][2];
+         unless $user_hash->{is_admin};
 
-      $self->dbh->select( 'users', ['username', 'password', 'is_admin', 'shared_key'], { username => $user }, sub {
-         my($dbh, $rows, $rv) = @_;
-
-         # Die if $user is doesnt exist
-         die "$user doesn't exist" unless $#$rows >= 0;
-
+      $self->find_user( $user )->then(sub {
          $self->dbh->delete( 'users', { username => $user }, sub {
             my($dbh, $rows, $rv) = @_;
             if ( $rv ) {
@@ -134,7 +126,13 @@ sub delete_user {
                $deferred->reject();
             }
          });
+      }, sub {
+         # Die if $user is doesnt exist
+         $deferred->reject("$user doesn't exist");
       });
+   }, sub {
+      # Die if $admin_user is doesnt exist
+      $deferred->reject("$admin_user doesn't exist");
    });
 
    return $deferred->promise;
@@ -163,22 +161,21 @@ sub new_user {
    }
    undef %options;
 
-   $self->dbh->select( 'users', ['username', 'password', 'is_admin', 'shared_key'], { username => $admin_user }, sub {
-       my($dbh, $rows, $rv) = @_;
-
-       # Die if $admin_user is doesnt exist
-       die '$admin_user doesn\'t exist' unless $#$rows >= 0;
-
+   $self->find_user( $admin_user )->then(sub {
+      my $user_hash = shift;
        # Die if $admin_user is not an admin
-       die '$admin_user is not an admin'
+       return $deferred->reject('$admin_user is not an admin')
          # Check is_admin column
-         unless $rows->[0][2];
+         unless $user_hash->{is_admin};
 
        # ----- Get SharedKey with admin creds -----
        $self->get_shared_key( $admin_user, $admin_password )->then(sub {
          my $shared_key = shift;
          # ----- Generate UserKey -----
          my $user_key = $self->{crypt_source}->random_bytes(512);
+
+         undef $admin_user;
+         undef $admin_password;
 
          $self->create_user_hash(
              user          => $new_user,
@@ -193,9 +190,42 @@ sub new_user {
 
          $deferred->resolve();
        });
-       undef $admin_user;
-       undef $admin_password;
+   }, sub {
+       # Die if $admin_user is doesnt exist
+       $deferred->reject('$admin_user doesn\'t exist');
+   });
 
+   return $deferred->promise;
+}
+
+=head2 find_user
+
+C<find_user> will search for the given user name and resolved the returned promise with a hash of the users information.
+
+=cut
+
+sub find_user {
+   my $self = shift;
+   my $user = shift;
+
+   my $deferred = deferred;
+
+   my $fields = ['username', 'password', 'is_admin', 'user_key', 'shared_key'];
+
+   $self->dbh->select( 'users', $fields, { username => $user }, sub {
+       my($dbh, $rows, $rv) = @_;
+
+       if ( $rv and $#$rows >= 0 ) {
+         my $user_hash;
+
+         for my $i ( 0 .. $#$fields ) {
+            $user_hash->{$fields->[$i]} = $rows->[0][$i];
+         }
+
+         $deferred->resolve($user_hash);
+       } else {
+         $deferred->reject("User $user not found");
+       }
    });
 
    return $deferred->promise;
@@ -253,43 +283,43 @@ sub get_shared_key {
         unless defined($user)
         and defined($password);
 
-      $self->dbh->select( 'users', ['username', 'password', 'user_key', 'shared_key'], { username => $user }, sub {
-          my($dbh, $rows, $rv) = @_;
+      $self->find_user( $user )->then(sub {
+         my $user_hash = shift;
 
-          # Die if user doesnt exist
-          die 'User must exist' unless $#$rows >= 0;
+         # Die if password doesnt match
+         if ( $user_hash->{password} ne Digest::SHA1::sha1_hex($password) ) {
+            die 'Password doesn\'t match';
+         }
 
-          # Die if password doesnt match
-          if ( $rows->[0][1] ne Digest::SHA1::sha1_hex($password) ) {
-             die 'Password doesn\'t match';
-          }
-
-          # ----- Get UserKey with password -----
-          # Create cipher for getting the UserKey
-          my $user_cipher = Crypt::CBC->new(
-              -key    => $password,
-              -cipher => 'Blowfish',
-          );
-          $key = $user_cipher->decrypt( $rows->[0][2] );
-          $encrypted_shared_key =  $rows->[0][3];
-
-          # ----- Get SharedKey with key -----
-          # Create cipher for getting the SharedKey
-          my $shared_cipher = Crypt::CBC->new(
-             -key => $key,
+         # ----- Get UserKey with password -----
+         # Create cipher for getting the UserKey
+         my $user_cipher = Crypt::CBC->new(
+             -key    => $password,
              -cipher => 'Blowfish',
-          );
-          my $shared_key = $shared_cipher->decrypt($encrypted_shared_key);
-          # Garbage collect, just in case
-          undef $shared_cipher;
-          undef $encrypted_shared_key;
+         );
+         $key = $user_cipher->decrypt( $user_hash->{user_key} );
+         $encrypted_shared_key =  $user_hash->{shared_key};
 
-          # Garbage collect, just in case
-          undef $user_cipher;
-          undef $password;
-          undef $user;
+         # ----- Get SharedKey with key -----
+         # Create cipher for getting the SharedKey
+         my $shared_cipher = Crypt::CBC->new(
+            -key => $key,
+            -cipher => 'Blowfish',
+         );
+         my $shared_key = $shared_cipher->decrypt($encrypted_shared_key);
+         # Garbage collect, just in case
+         undef $shared_cipher;
+         undef $encrypted_shared_key;
 
-          $deferred->resolve($shared_key);
+         # Garbage collect, just in case
+         undef $user_cipher;
+         undef $password;
+         undef $user;
+
+         $deferred->resolve($shared_key);
+      }, sub {
+         # Die if user doesnt exist
+         $deferred->reject('User must exist');
       });
    }
 

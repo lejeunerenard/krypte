@@ -155,30 +155,54 @@ subtest 'new_user' => sub {
    # Create default admin
    $app->prepare_handler(undef,undef,undef);
 
-  throws_ok { $app->new_user(
+  throws_ok {
+     my $cv = AE::cv;
+     $app->new_user(
         admin_user => undef,
         admin_password => 'pw',
         new_user => 'bob',
         new_password => 'thebuilder',
-     ); } qr/admin_user must be defined/, 'dies when admin_user is undefined';
-  throws_ok { $app->new_user(
+     )->then(undef, sub {
+        $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/admin_user must be defined/, 'dies when admin_user is undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->new_user(
         admin_user => 'admin',
         admin_password => undef,
         new_user => 'bob',
         new_password => 'thebuilder',
-     ); } qr/admin_password must be defined/, 'dies when admin_password is undefined';
-  throws_ok { $app->new_user(
+     )->then(undef, sub {
+         $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/admin_password must be defined/, 'dies when admin_password is undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->new_user(
         admin_user => 'admin',
         admin_password => 'pw',
         new_user => undef,
         new_password => 'thebuilder',
-     ); } qr/new_user must be defined/, 'dies when new_user is undefined';
-  throws_ok { $app->new_user(
+     )->then(undef, sub {
+        $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/new_user must be defined/, 'dies when new_user is undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->new_user(
         admin_user => 'admin',
         admin_password => 'pw',
         new_user => 'bob',
         new_password => undef,
-     ); } qr/new_password must be defined/, 'dies when new_password is undefined';
+     )->then(undef, sub {
+        $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/new_password must be defined/, 'dies when new_password is undefined';
   throws_ok {
      my $cv = AE::cv;
      $app->new_user(
@@ -219,23 +243,16 @@ subtest 'new_user' => sub {
   } qr/is not an admin/, 'dies when given a non-admin user as admin';
 
   my $cv = AE::cv;
-  $app->dbh->select('users', [ 'username', 'password', 'user_key', 'shared_key', 'is_admin' ], {
-        username => 'bob',
-     }, sub {
-        my ($dbh, $rows, $rv) = @_;
-
-        if ($rv) {
-           if ($#$rows == 0) {
-              is $rows->[0][1], Digest::SHA1::sha1_hex('thebuilder'), 'password was correctly hashed';
-              ok $rows->[0][2], 'user_key is truthy';
-              ok $rows->[0][3], 'shared_key is truthy';
-              isnt $rows->[0][4], 1, 'Bob isn\'t an admin';
-              $cv->broadcast;
-           }
-        } else {
-           fail 'Retrieving created user';
-        }
-     });
+  $app->find_user( 'bob'  )->then(sub {
+     my $user = shift;
+     is $user->{password}, Digest::SHA1::sha1_hex('thebuilder'), 'password was correctly hashed';
+     ok $user->{user_key}, 'user_key is truthy';
+     ok $user->{shared_key}, 'shared_key is truthy';
+     isnt $user->{is_admin}, 1, 'Bob isn\'t an admin';
+     $cv->send;
+  }, sub {
+     fail 'Retrieving created user';
+  });
   $cv->wait;
 
   $cv = AE::cv;
@@ -316,16 +333,28 @@ subtest 'delete_user' => sub {
      admin_user => 'admin',
      admin_password => 'underground',
   ); } qr/user must be defined/, 'dies when user is undefined';
-  throws_ok { $app->delete_user(
-     user => 'bob',
-     admin_user => undef,
-     admin_password => 'underground',
-  ); } qr/admin_user must be defined/, 'dies when admin_user is undefined';
-  throws_ok { $app->delete_user(
-     user => 'bob',
-     admin_user => 'admin',
-     admin_password => undef,
-  ); } qr/admin_password must be defined/, 'dies when admin_password is undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->delete_user(
+        user => 'bob',
+        admin_user => undef,
+        admin_password => 'underground',
+     )->then(undef, sub {
+        $cv->croak($_[0]);
+     });
+     $cv->wait;
+  } qr/admin_user must be defined/, 'dies when admin_user is undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->delete_user(
+        user => 'bob',
+        admin_user => 'admin',
+        admin_password => undef,
+     )->then(undef, sub {
+        $cv->croak($_[0]);
+     });
+     $cv->wait;
+  } qr/admin_password must be defined/, 'dies when admin_password is undefined';
   throws_ok {
      my $cv = AE::cv;
      $app->delete_user(
@@ -336,7 +365,7 @@ subtest 'delete_user' => sub {
          $cv->croak(shift);
      });
      $cv->wait;
-   } qr/methuselah doesn't exist/, 'dies when given non-existent user';
+  } qr/methuselah doesn't exist/, 'dies when given non-existent user';
   throws_ok {
      my $cv = AE::cv;
      $app->delete_user(
@@ -347,7 +376,7 @@ subtest 'delete_user' => sub {
          $cv->croak(shift);
      });
      $cv->wait;
-   } qr/derek doesn't exist/, 'dies when given non-existent admin';
+  } qr/derek doesn't exist/, 'dies when given non-existent admin';
   throws_ok {
      my $cv = AE::cv;
      $app->delete_user(
@@ -358,13 +387,17 @@ subtest 'delete_user' => sub {
         $cv->croak(shift);
      });
      $cv->wait;
-   } qr/is not an admin/, 'dies when given a non-admin user as admin';
+  } qr/is not an admin/, 'dies when given a non-admin user as admin';
   lives_ok { $app->delete_user(
      user => 'bob',
      admin_user => 'admin',
      admin_password => 'underground',
   ); } 'lives when all args are given';
-  ok not( defined $app->{users}{'bob'} ), 'Bob is no more';
+  $app->find_user( 'bob' )->then(sub {
+     pass 'Bob is no more';
+  }, sub {
+     fail 'Bob is no more';
+  });
 };
 my $session_token;
 subtest 'create_session' => sub {
