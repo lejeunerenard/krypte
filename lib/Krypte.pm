@@ -113,7 +113,7 @@ sub delete_user {
       my $user_hash = shift;
 
       # Die if $admin_user is not an admin
-      $deferred->reject('$admin_user is not an admin')
+      return $deferred->reject('$admin_user is not an admin')
          # Check is_admin column
          unless $user_hash->{is_admin};
 
@@ -279,7 +279,7 @@ sub get_shared_key {
       $deferred->resolve($shared_cipher->decrypt($encrypted_shared_key));
    } else {
       # Die if inputs are not set
-      die 'User and Password must be defined'
+      return $deferred->reject('User and Password must be defined')
         unless defined($user)
         and defined($password);
 
@@ -288,7 +288,7 @@ sub get_shared_key {
 
          # Die if password doesnt match
          if ( $user_hash->{password} ne Digest::SHA1::sha1_hex($password) ) {
-            die 'Password doesn\'t match';
+            $deferred->reject('Password doesn\'t match');
          }
 
          # ----- Get UserKey with password -----
@@ -347,37 +347,40 @@ sub create_session {
    }
    undef %options;
 
-   # Die if user doesnt exist
-   die "$user must exist" unless defined $self->{users}{$user};
+   my $deferred = deferred;
 
-   # Generate new session token
-   my $session_token = $self->{crypt_source}->random_bytes(512);
+   $self->find_user( $user )->then(sub {
+      # Generate new session token
+      my $session_token = $self->{crypt_source}->random_bytes(512);
 
-   # Get shared key and encrypt it with the session token
-   my $cipher = Crypt::CBC->new(
-      -key => $session_token,
-      -cipher => 'Blowfish',
-   );
-
-   $self->get_shared_key($user, $password)->then(sub {
-      my $shared_key = shift;
-      $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
-         $shared_key,
+      # Get shared key and encrypt it with the session token
+      my $cipher = Crypt::CBC->new(
+         -key => $session_token,
+         -cipher => 'Blowfish',
       );
+
+      my $shared_key_promise = $self->get_shared_key($user, $password)->then(sub {
+         my $shared_key = shift;
+         $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
+            $shared_key,
+         );
+         # Return the session token so the application can use it
+         $deferred->resolve( $session_token );
+      }, sub {
+         $deferred->reject;
+      });
+
+      # Create timer for the session
+      $self->{sessions}{$session_token}{timer} = AE::timer $self->{session_time_out}, 0, sub {
+         $self->end_session( session_token => $session_token );
+      };
+
    }, sub {
-      die "Creating Token ( $session_token ) failed\n";
+      # Die if user doesnt exist
+      $deferred->reject("$user must exist");
    });
-   $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
-     $self->get_shared_key($user, $password)
-   );
 
-   # Create timer for the session
-   $self->{sessions}{$session_token}{timer} = AE::timer $self->{session_time_out}, 0, sub {
-      $self->end_session( session_token => $session_token );
-   };
-
-   # Return the session token so the application can use it
-   return $session_token;
+   return $deferred->promise;
 }
 
 =head2 end_session

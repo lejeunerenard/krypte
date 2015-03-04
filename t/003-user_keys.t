@@ -125,8 +125,20 @@ subtest 'create_user_hash' => sub {
 # Setup temp admin
 subtest 'get_shared_key' => sub {
   # Validation
-  throws_ok { $app->get_shared_key(undef, 'underground'); } qr/User and Password must be defined/, 'dies when user undefined';
-  throws_ok { $app->get_shared_key('admin', undef); } qr/User and Password must be defined/, 'dies when password undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->get_shared_key(undef, 'underground')->then(sub {
+         $cv->send;
+     }, sub { $cv->croak( $_[0] ); });
+     $cv->wait;
+  } qr/User and Password must be defined/, 'dies when user undefined';
+  throws_ok {
+     my $cv = AE::cv;
+     $app->get_shared_key('admin', undef)->then(sub {
+         $cv->send;
+     }, sub { $cv->croak( $_[0] ); });
+     $cv->wait;
+  } qr/User and Password must be defined/, 'dies when password undefined';
   throws_ok {
      my $cv = AE::cv;
      $app->get_shared_key('bob', 'thebuilder')->then(sub {
@@ -393,11 +405,15 @@ subtest 'delete_user' => sub {
      admin_user => 'admin',
      admin_password => 'underground',
   ); } 'lives when all args are given';
+  my $cv = AE::cv;
   $app->find_user( 'bob' )->then(sub {
      pass 'Bob is no more';
+     $cv->send;
   }, sub {
      fail 'Bob is no more';
+     $cv->send;
   });
+  $cv->wait;
 };
 my $session_token;
 subtest 'create_session' => sub {
@@ -405,32 +421,49 @@ subtest 'create_session' => sub {
   my @required_fields = ( 'user', 'password');
   my %user_creds = (
     user => 'carl',
-    password => 'password',
+    password => 'sagan',
   );
   foreach my $field ( @required_fields ) {
     my %input_user = %user_creds;
     $input_user{$field} = undef;
-    throws_ok { $app->create_session(
-        %input_user
-    ); } qr/$field must be defined/, "dies when $field is undefined";
+    throws_ok {
+       my $cv = AE::cv;
+       $app->create_session(
+         %input_user
+       )->then(undef, sub {
+         $cv->croak(shift);
+       });
+       $cv->wait;
+    } qr/$field must be defined/, "dies when $field is undefined";
   }
 
-  throws_ok { $app->create_session(
-    user => 'diana',
-    password => 'princess',
-  ); } qr/diana must exist/, "dies when user doesn't exist";
+  throws_ok {
+     my $cv = AE::cv;
+     $app->create_session(
+       user => 'diana',
+       password => 'princess',
+     )->then(sub {
+           $cv->send;
+        }, sub {
+       $cv->croak(shift);
+     });
+     $cv->wait;
+  } qr/diana must exist/, "dies when user doesn't exist";
 
   lives_ok {
-    $session_token = $app->create_session(
+    my $cv = AE::cv;
+    $app->create_session(
       %user_creds,
-    );
+    )->then(sub {
+      $session_token = shift;
+      $cv->send;
+    }, sub {
+       $cv->croak($_[0] || 'something went wrong');
+    });
+    $cv->wait;
   } 'lives when used with a valid user';
   ok $session_token, 'returns a session token';
-  my @session_keys = ( 'shared_key', 'timer' );
-  is_deeply [ sort keys $app->{sessions}{$session_token} ], \@session_keys, 'created session has proper hash structure';
-  foreach ( @session_keys ) {
-    ok defined $app->{sessions}{$session_token}{$_}, "$_ is defined in session hash";
-  }
+  my @session_keys = ( 'shared_key', 'timer' ); is_deeply [ sort keys $app->{sessions}{$session_token} ], \@session_keys, 'created session has proper hash structure'; foreach ( @session_keys ) { ok defined $app->{sessions}{$session_token}{$_}, "$_ is defined in session hash"; }
 };
 subtest 'end_session' => sub {
    my %token = (
