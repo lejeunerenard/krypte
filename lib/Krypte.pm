@@ -359,7 +359,7 @@ sub create_session {
          -cipher => 'Blowfish',
       );
 
-      my $shared_key_promise = $self->get_shared_key($user, $password)->then(sub {
+      $self->get_shared_key($user, $password)->then(sub {
          my $shared_key = shift;
          $self->{sessions}{$session_token}{shared_key} = $cipher->encrypt(
             $shared_key,
@@ -369,6 +369,8 @@ sub create_session {
       }, sub {
          $deferred->reject;
       });
+
+      return $deferred->promise if $deferred->is_resolved;
 
       # Create timer for the session
       $self->{sessions}{$session_token}{timer} = AE::timer $self->{session_time_out}, 0, sub {
@@ -405,9 +407,10 @@ sub end_session {
 
 =head2 validate_credentials
 
-C<validate_credentials> will return a boolean based on whether the
-provided credentials are valid or not. User and password is only validated
-by checking to see if the user exists in the current hash.
+C<validate_credentials> will return a promise which will return a boolean
+based on whether the provided credentials are valid or not. User and
+password is only validated by checking to see if the user exists in the
+current hash.
 
 =cut
 
@@ -418,22 +421,25 @@ sub validate_credentials {
    my $user = $options{user};
    my $password = $options{password};
 
+   my $deferred = deferred;
+
    if ( defined $user ) {
-      # Return 0 if user doesnt exist
-      return 0 unless defined $self->{users}{$user};
-
-      # A user must have a password to valid
-      return 0 unless defined $password;
-
-      # Else return
-      return 1;
+      $self->find_user( $user )->then(sub {
+         $deferred->resolve(1);
+      }, sub {
+         $deferred->resolve(0);
+      });
    } else {
       # Return 0 if token doesnt exist
-      return 0 unless defined $self->{sessions}{$session_token};
-
-      # Else return
-      return 1;
+      if ( not exists $self->{sessions}{$session_token} ) {
+         $deferred->reject(0);
+      } else {
+         # Else return
+         $deferred->resolve(1);
+      }
    }
+
+   return $deferred->promise;
 }
 
 =head2 put_data
@@ -446,8 +452,15 @@ sub put_data {
    my $self = shift;
    my %options = @_;
 
+   my $cv = AE::cv;
    # Die if credentials are invalid
-   die "Credentials are invalid" unless $self->validate_credentials(@_);
+   $self->validate_credentials(@_)->then( sub {
+      $cv->send;
+   }, sub {
+      $cv->croak("Credentials are invalid");
+   } );
+
+   $cv->recv;
 
    # Get the SharedKey
    my $session_token = $options{session_token};
@@ -456,20 +469,39 @@ sub put_data {
 
    my $data = $options{data};
 
+   my $deferred = deferred;
+
    my $shared_key;
 
+   $cv = AE::cv;
    if ( $user ) {
-      $shared_key = $self->get_shared_key( $user, $password );
-
+      $self->get_shared_key( $user, $password )->then( sub {
+         $shared_key = shift;
+         $cv->send;
+      }, sub {
+         $deferred->reject(@_);
+         $cv->send;
+      });
       # Clean up
       undef $user;
       undef $password;
    } else {
-      $shared_key = $self->get_shared_key( $session_token );
+      $self->get_shared_key( $session_token )->then( sub {
+         $shared_key = shift;
+         $cv->send;
+      }, sub {
+         $deferred->reject(@_);
+         $cv->send;
+      });
 
       # Clean up
       undef $session_token;
    }
+
+   $cv->recv;
+
+   # Check to see if it failed already
+   return $deferred->promise if $deferred->is_resolved;
 
    # ----- Encrypt data -----
    my $cipher = Crypt::CBC->new(
@@ -477,8 +509,6 @@ sub put_data {
       -cipher => 'Blowfish',
    );
    my $encrypted_data = $cipher->encrypt( $data );
-
-   my $deferred = deferred;
 
    # Get the key for the data
    my $sha1_key = Digest::SHA1::sha1_hex($data);
@@ -510,7 +540,7 @@ sub put_data {
 
 =head2 get_data
 
-Summary of get_data
+C<get_data> will return the data from the db given valid credentials.
 
 =cut
 
@@ -519,7 +549,15 @@ sub get_data {
    my %options = @_;
 
    # Die if credentials are invalid
-   die "Credentials are invalid" unless $self->validate_credentials(@_);
+   my $cv = AE::cv;
+   # Die if credentials are invalid
+   $self->validate_credentials(@_)->then( sub {
+      $cv->send;
+   }, sub {
+      $cv->croak("Credentials are invalid");
+   } );
+
+   $cv->recv;
 
    # Get the SharedKey
    my $session_token = $options{session_token};
@@ -530,18 +568,38 @@ sub get_data {
 
    my $shared_key;
 
+   my $deferred = deferred;
+
+   $cv = AE::cv;
+
    if ( $user ) {
-      $shared_key = $self->get_shared_key( $user, $password );
+      $self->get_shared_key( $user, $password )->then(sub {
+         $shared_key = shift;
+         $cv->send;
+      }, sub {
+         $deferred->reject(@_);
+         $cv->send;
+      });
 
       # Clean up
       undef $user;
       undef $password;
    } else {
-      $shared_key = $self->get_shared_key( $session_token );
+      $self->get_shared_key( $session_token )->then(sub {
+         $shared_key = shift;
+         $cv->send;
+      }, sub {
+         $deferred->reject(@_);
+         $cv->send;
+      });
 
       # Clean up
       undef $session_token;
    }
+   $cv->recv;
+
+   # Check to see if it failed already
+   return $deferred->promise if $deferred->is_resolved;
 
    # ----- Encrypt data -----
    my $cipher = Crypt::CBC->new(
@@ -549,32 +607,30 @@ sub get_data {
       -cipher => 'Blowfish',
    );
 
-   my $deferred = deferred;
-
    # GET THE DATA
-   $self->dbh->select( 'data', ['value'], { sha1_key => $key, },sub {
+   $self->dbh->select( 'data', ['value'], { sha1_key => $key, }, sub {
       my($dbh, $rows, $rv) = @_;
 
       # First check that there is no error
       if ( $@ ) {
-         $deferred->reject($@);
+         return $deferred->reject($@);
       } else {
          # Check that something was actually found
-         if ( $#$rows == 0 ) {
+         if ( @$rows == 1 ) {
             # Get data from rows
             my $encrypted_data = $rows->[0][0];
             my $data = $cipher->decrypt( $encrypted_data );
             # Get the key for the data
             my $sha1_key = Digest::SHA1::sha1_hex($data);
 
-            # Now check if the key matchs the data
+            # Now check if the key matches the data
             if ( $sha1_key ne $key ) {
-               $deferred->reject('Data not decrypted successfully');
+               return $deferred->reject('Data not decrypted successfully');
             }
 
             $deferred->resolve($data);
          } else {
-            $deferred->reject('data not found');
+            return $deferred->reject('data not found');
          }
       }
    });
@@ -818,5 +874,3 @@ sub run {
 }
 
 1;
-
-__END__
