@@ -16,7 +16,7 @@ plan skip_all => 'DB credentials not given' unless defined $ENV{DB_USER} and def
 
 my $ae_dbi_abstract    = new Test::MockModule('AnyEvent::DBI::Abstract');
 
-use Krypte;
+use App::Krypte;
 
 my $test_db_name = 'krypte_test';
 
@@ -25,7 +25,7 @@ my $password = $ENV{DB_PASSWORD};
 
 use Data::Dumper;
 
-my $app = new Krypte(
+my $app = App::Krypte->new(
    dsn => "dbi:mysql:",
    db_username => $user || '',
    db_password => $password || '',

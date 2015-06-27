@@ -1,7 +1,9 @@
-package Krypte;
+package App::Krypte;
 
 use strict;
 use warnings;
+
+our $VERSION = '0.90';
 
 use FindBin;
 use lib "$FindBin::Bin/../local/lib/perl5";
@@ -860,7 +862,7 @@ sub start_listening {
 }
 
 sub run {
-   my $self = shift || Krypte->new();
+   my $self = shift || App::Krypte->new();
    my %options = @_;
    my $host = $options{host};
    my $port = $options{port};
@@ -874,3 +876,78 @@ sub run {
 }
 
 1;
+
+__END__
+
+=encoding utf-8
+
+=head1 NAME
+
+App::Jiffy - A minimalist time tracking app focused on precision and effortlessness.
+
+=head1 SYNOPSIS
+
+  use App::Jiffy;
+  # cmd line tool
+  jiffy Solving world hunger
+  jiffy Cleaning the plasma manifolds
+  jiffy current # Returns the elapsed time for the current task
+  # Run server
+  jiffyd
+  curl -d "title=Meeting with Client X" http://localhost:3000/timeentry
+
+=head1 DESCRIPTION
+
+App::Jiffy's philosophy is that you should have to do as little as possible to track your time. Instead you should focus on working. App::Jiffy also focuses on precision. Many times time tracking results in globbing activities together masking the fact that your 5 hours of work on project "X" was actually 3 hours of work with interruptions from your coworker asking about project "Y".
+In order to be precise with as little effort as possible, App::Jiffy will be available via a myriad of mediums and devices but will have a central server to combine all the information. Plans currently include the following applications:
+
+=over
+
+=item Command line tool
+
+=item Web app L<App::Jiffyd>
+
+=item iPhone app ( potentially )
+
+=back
+
+=head1 INSTALLATION
+
+  curl -L https://cpanmin.us | perl - git://github.com/lejeunerenard/jiffy
+
+=head1 METHODS
+
+The following are methods available on the C<App::Jiffy> object.
+
+=head2 add_entry
+
+C<add_entry> will create a new TimeEntry with the current time as the entry's start_time.
+
+=cut
+
+=head2 current_time
+
+C<current_time> will print out the elapsed time for the current task (AKA the time since the last entry was created).
+
+=cut
+
+=head2 run
+
+C<run> will start an instance of the Jiffy app.
+
+=cut
+
+=head1 AUTHOR
+
+Sean Zellmer E<lt>sean@lejeunerenard.comE<gt>
+
+=head1 COPYRIGHT
+
+Copyright 2015- Sean Zellmer
+
+=head1 LICENSE
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
+
+=cut

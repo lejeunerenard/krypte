@@ -9,4 +9,4 @@ use Test::More tests => 1;
 use Test::Deep; # (); # uncomment to stop prototype errors
 use Test::Exception;
 
-use_ok 'Krypte';
+use_ok 'App::Krypte';
