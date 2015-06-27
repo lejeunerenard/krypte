@@ -650,3 +650,4 @@ subtest 'get_data' => sub  {
    is $data_dup, $data, 'returns the same data as before';
 };
 done_testing();
+POSIX::_exit 0;
