@@ -24,6 +24,96 @@ use Data::Dumper;
 
 use constant DEBUG => $ENV{SERVER_DEBUG};
 
+=encoding utf-8
+
+=head1 NAME
+
+Krypté - A database encryption service w/ multiple user support.
+
+=head1 SYNOPSIS
+
+  use App::Krypte;
+
+  my $app = App::Krypte->new(
+      dsn => 'dbi:mysql:dbname',
+      db_username => 'alice',
+      db_password => 'secretz',
+  );
+
+=head1 DESCRIPTION
+
+Krypté is a service that provides a simple API to developers so they don't have to worry about how they encrypt their data. Instead they send it off to Krypté and it's taken care of.
+
+=head1 METHODOLOGIES
+
+Krypté's method of encrypting data and managing multiple users looks like this:
+
+=head2 Initial Setup
+
+=over
+
+=item 1
+
+One random master key ( or C<share_key> ) is created.
+
+=item 2
+
+A random user key is created and used to encrypt the master key.
+
+=item 3
+
+The user key is encrypted with a password for that user.
+
+=item 4
+
+The encrypted user key and master key are stored for that user in the database.
+
+=back
+
+=head2 Storing ( Putting ) Data
+
+=over
+
+=item 1
+
+Krypté receives credentials  and a chunk of data.
+
+=item 2
+
+The credentials are validated.
+
+=item 3
+
+The shared key is retrieved.
+
+=over
+
+=item 1
+
+If the credentials are a username and password, the encrypted user key stored for the username is unencrypted using the password.
+
+=item 2
+
+The user key is then used to unencrypt the shared key.
+
+=back
+
+=item 4
+
+The shared key is used to encrypt the data using L<Crypt::CBC> with the Blowfish cipher.
+
+=item 5
+
+The encrypted result is stored with a sha1 key of the data.
+
+=item 6
+
+The key is returned to the initial requester as a key for the data.
+
+=back
+
+=head1 METHODS
+
 =head2 create_user_hash
 
 Creates or overrides the user hash with the given info
@@ -879,71 +969,13 @@ sub run {
 
 __END__
 
-=encoding utf-8
-
-=head1 NAME
-
-App::Jiffy - A minimalist time tracking app focused on precision and effortlessness.
-
-=head1 SYNOPSIS
-
-  use App::Jiffy;
-  # cmd line tool
-  jiffy Solving world hunger
-  jiffy Cleaning the plasma manifolds
-  jiffy current # Returns the elapsed time for the current task
-  # Run server
-  jiffyd
-  curl -d "title=Meeting with Client X" http://localhost:3000/timeentry
-
-=head1 DESCRIPTION
-
-App::Jiffy's philosophy is that you should have to do as little as possible to track your time. Instead you should focus on working. App::Jiffy also focuses on precision. Many times time tracking results in globbing activities together masking the fact that your 5 hours of work on project "X" was actually 3 hours of work with interruptions from your coworker asking about project "Y".
-In order to be precise with as little effort as possible, App::Jiffy will be available via a myriad of mediums and devices but will have a central server to combine all the information. Plans currently include the following applications:
-
-=over
-
-=item Command line tool
-
-=item Web app L<App::Jiffyd>
-
-=item iPhone app ( potentially )
-
-=back
-
-=head1 INSTALLATION
-
-  curl -L https://cpanmin.us | perl - git://github.com/lejeunerenard/jiffy
-
-=head1 METHODS
-
-The following are methods available on the C<App::Jiffy> object.
-
-=head2 add_entry
-
-C<add_entry> will create a new TimeEntry with the current time as the entry's start_time.
-
-=cut
-
-=head2 current_time
-
-C<current_time> will print out the elapsed time for the current task (AKA the time since the last entry was created).
-
-=cut
-
-=head2 run
-
-C<run> will start an instance of the Jiffy app.
-
-=cut
-
 =head1 AUTHOR
 
 Sean Zellmer E<lt>sean@lejeunerenard.comE<gt>
 
 =head1 COPYRIGHT
 
-Copyright 2015- Sean Zellmer
+Copyright 2015 - Sean Zellmer
 
 =head1 LICENSE
 
