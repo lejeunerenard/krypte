@@ -40,6 +40,12 @@ Krypté - A database encryption service w/ multiple user support.
       db_password => 'secretz',
   );
 
+=head1 WARNING
+
+B<I am not a security expert. So use with caution.>
+
+If you see a flaw, B<PLEASE> L<submit an issue|https://github.com/lejeunerenard/krypte/issues> or better yet L<submit a PR|https://github.com/lejeunerenard/krypte/pulls> with the reason why your change is better and more secure.
+
 =head1 DESCRIPTION
 
 Krypté is a service that provides a simple API to developers so they don't have to worry about how they encrypt their data. Instead they send it off to Krypté and it's taken care of.
